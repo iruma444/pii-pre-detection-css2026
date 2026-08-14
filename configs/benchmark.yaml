@@ -1,0 +1,42 @@
+dataset:
+  path: datasets/ai4privacy_ja_500.jsonl
+  name: ai4privacy/pii-masking-openpii-1.5m
+  sample_size: 500
+  seed: 42
+
+llm:
+  backend: ollama
+  model: qwen2.5:7b
+  temperature: 0.0
+
+nlp:
+  model: ja_ginza
+
+bootstrap:
+  iterations: 2000
+  seed: 42
+
+methods:
+  regex:
+    use_regex: true
+    use_dict: false
+    use_nlp: false
+    use_llm: false
+
+  regex_dict:
+    use_regex: true
+    use_dict: true
+    use_nlp: false
+    use_llm: false
+
+  regex_dict_ginza:
+    use_regex: true
+    use_dict: true
+    use_nlp: true
+    use_llm: false
+
+  proposed:
+    use_regex: true
+    use_dict: true
+    use_nlp: true
+    use_llm: true

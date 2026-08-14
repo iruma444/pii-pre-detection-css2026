@@ -82,15 +82,21 @@ class LlmRefiner:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout_seconds) as response:
                 raw = json.loads(response.read().decode("utf-8"))
-            self.stats.seconds += time.perf_counter() - started
             decisions = self._parse_response(raw.get("response", ""))
             return self._apply_decisions(candidates, decisions)
-        except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError, OSError):
-            self.stats.seconds += time.perf_counter() - started
+        except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError, OSError) as exc:
             self.stats.failures += 1
+            print(
+                f"[llm] refinement failed: {type(exc).__name__}: {exc}",
+                flush=True,
+            )
             # Fail-open for privacy preservation: retaining a candidate is safer
             # than discarding it when the refinement model is unavailable.
             return candidates
+        finally:
+            # Account for each call exactly once. Previously, parse failures were
+            # counted once before parsing and a second time in the exception path.
+            self.stats.seconds += time.perf_counter() - started
 
     def _build_prompt(self, text: str, candidates: list[dict]) -> str:
         candidates_json = json.dumps(candidates, ensure_ascii=False, indent=2)

@@ -38,7 +38,7 @@ class PipelineConfig:
     use_dict: bool = True
     use_nlp: bool = True
     use_llm: bool = True
-    llm_model: str = "qwen2.5:7b"
+    llm_model: str = "gpt-oss:20b"
 
 
 @dataclass

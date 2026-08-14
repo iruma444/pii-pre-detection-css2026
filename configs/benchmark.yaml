@@ -18,25 +18,32 @@ bootstrap:
 
 methods:
   regex:
+    mode: pipeline
     use_regex: true
     use_dict: false
     use_nlp: false
     use_llm: false
 
   regex_dict:
+    mode: pipeline
     use_regex: true
     use_dict: true
     use_nlp: false
     use_llm: false
 
   regex_dict_ginza:
+    mode: pipeline
     use_regex: true
     use_dict: true
     use_nlp: true
     use_llm: false
 
   proposed:
+    mode: pipeline
     use_regex: true
     use_dict: true
     use_nlp: true
     use_llm: true
+
+  llm_only:
+    mode: llm_only

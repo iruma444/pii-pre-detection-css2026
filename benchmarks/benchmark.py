@@ -47,6 +47,18 @@ def parse_entities(raw_entities: list[dict]) -> list[PIIEntity]:
     return output
 
 
+def parse_target_types(raw_types: list[str] | None) -> set[PIIType] | None:
+    if not raw_types:
+        return None
+    return {PIIType(value) for value in raw_types}
+
+
+def filter_types(entities: list[PIIEntity], target_types: set[PIIType] | None) -> list[PIIEntity]:
+    if target_types is None:
+        return entities
+    return [entity for entity in entities if entity.type in target_types]
+
+
 def percentile(values: list[float], q: float) -> float:
     if not values:
         return 0.0
@@ -80,6 +92,7 @@ def evaluate_method(
     records: list[dict],
     llm_model: str,
     bootstrap_cfg: dict,
+    target_types: set[PIIType] | None,
 ) -> tuple[dict, list[dict], list[dict]]:
     mode = str(method_cfg.get("mode", "pipeline"))
     pipeline: PiiPipeline | None = None
@@ -107,7 +120,7 @@ def evaluate_method(
 
     for record in records:
         text = str(record["text"])
-        truths = parse_entities(record.get("entities", []))
+        truths = filter_types(parse_entities(record.get("entities", [])), target_types)
 
         started = time.perf_counter()
         if llm_only is not None:
@@ -116,6 +129,7 @@ def evaluate_method(
             assert pipeline is not None
             predictions, _ = pipeline.process(text)
         elapsed_ms = (time.perf_counter() - started) * 1000.0
+        predictions = filter_types(predictions, target_types)
         latencies_ms.append(elapsed_ms)
 
         exact = score_document(truths, predictions, mode="exact")
@@ -170,6 +184,7 @@ def evaluate_method(
     summary = {
         "method": name,
         "documents": len(records),
+        "target_types": "+".join(sorted(t.value for t in target_types)) if target_types else "ALL",
         "exact_tp": exact_total.tp,
         "exact_fp": exact_total.fp,
         "exact_fn": exact_total.fn,
@@ -251,6 +266,7 @@ def main() -> None:
     if args.limit is not None:
         records = records[: args.limit]
 
+    target_types = parse_target_types(cfg.get("evaluation", {}).get("target_types"))
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -268,6 +284,7 @@ def main() -> None:
             records,
             str(cfg["llm"]["model"]),
             cfg.get("bootstrap", {}),
+            target_types,
         )
         summaries.append(summary)
         all_per_document.extend(per_document)

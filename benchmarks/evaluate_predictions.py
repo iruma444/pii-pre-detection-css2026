@@ -6,7 +6,9 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
-from benchmarks.benchmark import load_dataset, parse_entities
+import yaml
+
+from benchmarks.benchmark import filter_types, load_dataset, parse_entities, parse_target_types
 from benchmarks.evaluator import Counts, aggregate, bootstrap_f1_ci, score_document
 from src.schemas import PIIEntity, PIIType
 
@@ -43,15 +45,22 @@ def _pred_entities(raw: list[dict]) -> list[PIIEntity]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", default="datasets/ai4privacy_ja_500.jsonl")
+    parser.add_argument("--config", default="configs/benchmark.yaml")
+    parser.add_argument("--dataset", default=None)
     parser.add_argument("--predictions", required=True)
     parser.add_argument("--method", required=True)
     parser.add_argument("--output", default="results/external_summary.csv")
-    parser.add_argument("--bootstrap-iterations", type=int, default=2000)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--bootstrap-iterations", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
 
-    dataset = load_dataset(Path(args.dataset))
+    cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    dataset_path = Path(args.dataset or cfg["dataset"]["path"])
+    target_types = parse_target_types(cfg.get("evaluation", {}).get("target_types"))
+    iterations = args.bootstrap_iterations or int(cfg.get("bootstrap", {}).get("iterations", 2000))
+    seed = args.seed if args.seed is not None else int(cfg.get("bootstrap", {}).get("seed", 42))
+
+    dataset = load_dataset(dataset_path)
     prediction_rows = _load_prediction_rows(Path(args.predictions))
 
     exact_docs: list[Counts] = []
@@ -62,9 +71,9 @@ def main() -> None:
 
     for record in dataset:
         record_id = str(record["id"])
-        truths = parse_entities(record.get("entities", []))
+        truths = filter_types(parse_entities(record.get("entities", [])), target_types)
         row = prediction_rows.get(record_id, {"predictions": []})
-        preds = _pred_entities(row.get("predictions", []))
+        preds = filter_types(_pred_entities(row.get("predictions", [])), target_types)
         if "latency_ms" in row:
             latencies.append(float(row["latency_ms"]))
 
@@ -80,12 +89,13 @@ def main() -> None:
 
     exact = aggregate(exact_docs)
     relaxed = aggregate(relaxed_docs)
-    exact_ci = bootstrap_f1_ci(exact_docs, iterations=args.bootstrap_iterations, seed=args.seed)
-    relaxed_ci = bootstrap_f1_ci(relaxed_docs, iterations=args.bootstrap_iterations, seed=args.seed)
+    exact_ci = bootstrap_f1_ci(exact_docs, iterations=iterations, seed=seed)
+    relaxed_ci = bootstrap_f1_ci(relaxed_docs, iterations=iterations, seed=seed)
 
     summary = {
         "method": args.method,
         "documents": len(dataset),
+        "target_types": "+".join(sorted(t.value for t in target_types)) if target_types else "ALL",
         "exact_tp": exact.tp,
         "exact_fp": exact.fp,
         "exact_fn": exact.fn,

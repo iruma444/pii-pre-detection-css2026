@@ -24,6 +24,7 @@ The benchmark compares the following ablations on the same held-out data:
 3. `regex_dict_ginza`
 4. `proposed` = Regex + Dictionary + GiNZA + selective local LLM
 5. `llm_only` = full-text local-LLM extraction using the same Ollama model
+6. Amazon Bedrock Guardrails can be rerun separately on the exact same JSONL sample
 
 ## Metrics
 
@@ -54,8 +55,10 @@ Exact-span scoring is the primary boundary-sensitive metric. Relaxed scoring is 
 .
 ├── benchmarks/
 │   ├── ai4privacy_adapter.py   # fixed-seed OpenPII -> benchmark JSONL
+│   ├── bedrock_baseline.py     # ApplyGuardrail on exactly the same JSONL
 │   ├── benchmark.py            # ablation, accuracy, latency, LLM-call benchmark
 │   ├── environment.py          # reproducibility metadata
+│   ├── evaluate_predictions.py # score external baseline predictions
 │   └── evaluator.py            # exact/relaxed span evaluation + bootstrap CI
 ├── configs/
 │   └── benchmark.yaml
@@ -127,6 +130,28 @@ results/
 ├── per_document.jsonl
 └── environment.json
 ```
+
+## Rerun Amazon Bedrock Guardrails on the identical held-out sample
+
+The earlier internal AWS evaluation used a seed-42 sample, but a seed alone is insufficient to prove that a newly generated sample contains the identical rows when the sampling implementation differs. For a defensible paper comparison, the safest procedure is to rerun Bedrock on the exact benchmark JSONL generated above.
+
+```bash
+python -m benchmarks.bedrock_baseline \
+  --guardrail-id YOUR_GUARDRAIL_ID \
+  --guardrail-version DRAFT \
+  --region ap-southeast-2
+```
+
+Then evaluate those predictions using the same exact/relaxed scorer:
+
+```bash
+python -m benchmarks.evaluate_predictions \
+  --predictions results/bedrock_predictions.jsonl \
+  --method bedrock \
+  --output results/bedrock_summary.csv
+```
+
+This keeps the service comparison on the same texts and the same target taxonomy.
 
 ## Interpretation of LLM call rate
 

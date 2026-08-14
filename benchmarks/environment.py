@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 import shutil
 import subprocess
@@ -46,6 +47,7 @@ def collect_environment(llm_model: str) -> dict[str, Any]:
     ])
     pip_freeze = _run([sys.executable, "-m", "pip", "freeze"])
     ollama_version = _run(["ollama", "--version"])
+    ollama_runtime = _run(["ollama", "ps"])
     ollama_model = _ollama_show(llm_model)
 
     return {
@@ -55,6 +57,8 @@ def collect_environment(llm_model: str) -> dict[str, Any]:
         "processor": platform.processor(),
         "nvidia_smi": gpu,
         "ollama_version": ollama_version,
+        "ollama_runtime": ollama_runtime,
+        "ollama_llm_library": os.environ.get("OLLAMA_LLM_LIBRARY"),
         "ollama_model": ollama_model,
         "pip_freeze": pip_freeze.splitlines() if pip_freeze else None,
     }

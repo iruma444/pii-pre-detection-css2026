@@ -12,6 +12,7 @@ from pathlib import Path
 import yaml
 
 from benchmarks.evaluator import aggregate, bootstrap_f1_ci, score_document
+from src.extractors.llm_only_extractor import FullTextLlmExtractor
 from src.pipeline import PiiPipeline
 from src.schemas import PIIEntity, PIIType, PipelineConfig
 
@@ -66,15 +67,22 @@ def evaluate_method(
     llm_model: str,
     bootstrap_cfg: dict,
 ) -> tuple[dict, list[dict]]:
-    config = PipelineConfig(
-        use_regex=bool(method_cfg.get("use_regex", True)),
-        use_dict=bool(method_cfg.get("use_dict", True)),
-        use_nlp=bool(method_cfg.get("use_nlp", True)),
-        use_llm=bool(method_cfg.get("use_llm", True)),
-        llm_model=llm_model,
-    )
-    pipeline = PiiPipeline(config)
-    pipeline.reset_stats()
+    mode = str(method_cfg.get("mode", "pipeline"))
+    pipeline: PiiPipeline | None = None
+    llm_only: FullTextLlmExtractor | None = None
+
+    if mode == "llm_only":
+        llm_only = FullTextLlmExtractor(llm_model)
+    else:
+        config = PipelineConfig(
+            use_regex=bool(method_cfg.get("use_regex", True)),
+            use_dict=bool(method_cfg.get("use_dict", True)),
+            use_nlp=bool(method_cfg.get("use_nlp", True)),
+            use_llm=bool(method_cfg.get("use_llm", True)),
+            llm_model=llm_model,
+        )
+        pipeline = PiiPipeline(config)
+        pipeline.reset_stats()
 
     latencies_ms: list[float] = []
     exact_counts = []
@@ -86,7 +94,11 @@ def evaluate_method(
         truths = parse_entities(record.get("entities", []))
 
         started = time.perf_counter()
-        predictions, _ = pipeline.process(text)
+        if llm_only is not None:
+            predictions = llm_only.extract(text)
+        else:
+            assert pipeline is not None
+            predictions, _ = pipeline.process(text)
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         latencies_ms.append(elapsed_ms)
 
@@ -119,7 +131,20 @@ def evaluate_method(
         seed=int(bootstrap_cfg.get("seed", 42)),
     )
 
-    llm_failures = pipeline.llm_refiner.stats.failures if pipeline.llm_refiner else 0
+    if llm_only is not None:
+        llm_calls = llm_only.stats.calls
+        llm_seconds = llm_only.stats.seconds
+        llm_failures = llm_only.stats.failures
+        llm_call_rate = llm_calls / len(records) if records else 0.0
+        ginza_available = None
+    else:
+        assert pipeline is not None
+        llm_calls = pipeline.stats.llm_calls
+        llm_seconds = pipeline.stats.llm_seconds
+        llm_failures = pipeline.llm_refiner.stats.failures if pipeline.llm_refiner else 0
+        llm_call_rate = pipeline.stats.llm_call_rate
+        ginza_available = pipeline.ginza_available
+
     summary = {
         "method": name,
         "documents": len(records),
@@ -143,11 +168,11 @@ def evaluate_method(
         "p50_ms": percentile(latencies_ms, 0.50),
         "p95_ms": percentile(latencies_ms, 0.95),
         "total_seconds": sum(latencies_ms) / 1000.0,
-        "llm_calls": pipeline.stats.llm_calls,
-        "llm_call_rate": pipeline.stats.llm_call_rate,
-        "llm_seconds": pipeline.stats.llm_seconds,
+        "llm_calls": llm_calls,
+        "llm_call_rate": llm_call_rate,
+        "llm_seconds": llm_seconds,
         "llm_failures": llm_failures,
-        "ginza_available": pipeline.ginza_available,
+        "ginza_available": ginza_available,
     }
     return summary, per_document
 
@@ -167,6 +192,7 @@ def main() -> None:
     parser.add_argument("--config", default="configs/benchmark.yaml")
     parser.add_argument("--output-dir", default="results")
     parser.add_argument("--limit", type=int, default=None, help="Optional smoke-test limit")
+    parser.add_argument("--method", action="append", help="Run only selected method(s)")
     args = parser.parse_args()
 
     config_path = Path(args.config)
@@ -179,9 +205,12 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    requested = set(args.method or [])
     summaries: list[dict] = []
     all_per_document: list[dict] = []
     for method_name, method_cfg in cfg["methods"].items():
+        if requested and method_name not in requested:
+            continue
         print(f"[benchmark] method={method_name} documents={len(records)}", flush=True)
         summary, per_document = evaluate_method(
             method_name,

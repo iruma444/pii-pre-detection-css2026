@@ -3,15 +3,15 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import platform
 import statistics
-import sys
 import time
+from collections import defaultdict
 from pathlib import Path
 
 import yaml
 
-from benchmarks.evaluator import aggregate, bootstrap_f1_ci, score_document
+from benchmarks.environment import collect_environment
+from benchmarks.evaluator import Counts, aggregate, bootstrap_f1_ci, score_document
 from src.extractors.llm_only_extractor import FullTextLlmExtractor
 from src.pipeline import PiiPipeline
 from src.schemas import PIIEntity, PIIType, PipelineConfig
@@ -60,13 +60,27 @@ def percentile(values: list[float], q: float) -> float:
     return ordered[lo] * (1.0 - frac) + ordered[hi] * frac
 
 
+def _type_counts(
+    truths: list[PIIEntity], predictions: list[PIIEntity], mode: str
+) -> dict[PIIType, Counts]:
+    result: dict[PIIType, Counts] = {}
+    present_types = {e.type for e in truths} | {e.type for e in predictions}
+    for pii_type in present_types:
+        result[pii_type] = score_document(
+            [e for e in truths if e.type == pii_type],
+            [e for e in predictions if e.type == pii_type],
+            mode=mode,
+        )
+    return result
+
+
 def evaluate_method(
     name: str,
     method_cfg: dict,
     records: list[dict],
     llm_model: str,
     bootstrap_cfg: dict,
-) -> tuple[dict, list[dict]]:
+) -> tuple[dict, list[dict], list[dict]]:
     mode = str(method_cfg.get("mode", "pipeline"))
     pipeline: PiiPipeline | None = None
     llm_only: FullTextLlmExtractor | None = None
@@ -85,8 +99,10 @@ def evaluate_method(
         pipeline.reset_stats()
 
     latencies_ms: list[float] = []
-    exact_counts = []
-    relaxed_counts = []
+    exact_counts: list[Counts] = []
+    relaxed_counts: list[Counts] = []
+    exact_type_totals: dict[PIIType, Counts] = defaultdict(Counts)
+    relaxed_type_totals: dict[PIIType, Counts] = defaultdict(Counts)
     per_document: list[dict] = []
 
     for record in records:
@@ -107,6 +123,11 @@ def evaluate_method(
         exact_counts.append(exact)
         relaxed_counts.append(relaxed)
 
+        for pii_type, counts in _type_counts(truths, predictions, "exact").items():
+            exact_type_totals[pii_type] = exact_type_totals[pii_type] + counts
+        for pii_type, counts in _type_counts(truths, predictions, "relaxed").items():
+            relaxed_type_totals[pii_type] = relaxed_type_totals[pii_type] + counts
+
         per_document.append(
             {
                 "method": name,
@@ -114,6 +135,7 @@ def evaluate_method(
                 "latency_ms": elapsed_ms,
                 "exact": {"tp": exact.tp, "fp": exact.fp, "fn": exact.fn},
                 "relaxed": {"tp": relaxed.tp, "fp": relaxed.fp, "fn": relaxed.fn},
+                "truth": [t.to_dict() for t in truths],
                 "predictions": [p.to_dict() for p in predictions],
             }
         )
@@ -174,7 +196,34 @@ def evaluate_method(
         "llm_failures": llm_failures,
         "ginza_available": ginza_available,
     }
-    return summary, per_document
+
+    per_type_rows: list[dict] = []
+    all_types = sorted(
+        set(exact_type_totals) | set(relaxed_type_totals), key=lambda t: t.value
+    )
+    for pii_type in all_types:
+        exact_t = exact_type_totals.get(pii_type, Counts())
+        relaxed_t = relaxed_type_totals.get(pii_type, Counts())
+        per_type_rows.append(
+            {
+                "method": name,
+                "type": pii_type.value,
+                "exact_tp": exact_t.tp,
+                "exact_fp": exact_t.fp,
+                "exact_fn": exact_t.fn,
+                "exact_precision": exact_t.precision,
+                "exact_recall": exact_t.recall,
+                "exact_f1": exact_t.f1,
+                "relaxed_tp": relaxed_t.tp,
+                "relaxed_fp": relaxed_t.fp,
+                "relaxed_fn": relaxed_t.fn,
+                "relaxed_precision": relaxed_t.precision,
+                "relaxed_recall": relaxed_t.recall,
+                "relaxed_f1": relaxed_t.f1,
+            }
+        )
+
+    return summary, per_document, per_type_rows
 
 
 def write_csv(path: Path, rows: list[dict]) -> None:
@@ -208,11 +257,12 @@ def main() -> None:
     requested = set(args.method or [])
     summaries: list[dict] = []
     all_per_document: list[dict] = []
+    all_per_type: list[dict] = []
     for method_name, method_cfg in cfg["methods"].items():
         if requested and method_name not in requested:
             continue
         print(f"[benchmark] method={method_name} documents={len(records)}", flush=True)
-        summary, per_document = evaluate_method(
+        summary, per_document, per_type = evaluate_method(
             method_name,
             method_cfg,
             records,
@@ -221,6 +271,7 @@ def main() -> None:
         )
         summaries.append(summary)
         all_per_document.extend(per_document)
+        all_per_type.extend(per_type)
         print(
             f"  exact_f1={summary['exact_f1']:.4f} "
             f"relaxed_f1={summary['relaxed_f1']:.4f} "
@@ -230,17 +281,19 @@ def main() -> None:
         )
 
     write_csv(output_dir / "summary.csv", summaries)
+    write_csv(output_dir / "per_type.csv", all_per_type)
     with (output_dir / "per_document.jsonl").open("w", encoding="utf-8") as f:
         for row in all_per_document:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-    environment = {
-        "python": sys.version,
-        "platform": platform.platform(),
-        "config": cfg,
-        "dataset_records_used": len(records),
-        "generated_at_unix": time.time(),
-    }
+    environment = collect_environment(str(cfg["llm"]["model"]))
+    environment.update(
+        {
+            "config": cfg,
+            "dataset_records_used": len(records),
+            "generated_at_unix": time.time(),
+        }
+    )
     (output_dir / "environment.json").write_text(
         json.dumps(environment, ensure_ascii=False, indent=2), encoding="utf-8"
     )

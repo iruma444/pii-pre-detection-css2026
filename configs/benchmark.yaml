@@ -18,7 +18,8 @@ evaluation:
 
 llm:
   backend: ollama
-  model: qwen2.5:7b
+  # Fixed local LLM condition for the CSS 2026 paper experiments.
+  model: gpt-oss:20b
   temperature: 0.0
 
 nlp:

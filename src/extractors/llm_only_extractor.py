@@ -39,7 +39,7 @@ class FullTextLlmExtractor:
 
     def __init__(
         self,
-        model_name: str = "qwen2.5:7b",
+        model_name: str = "gpt-oss:20b",
         api_url: str = "http://localhost:11434/api/generate",
         timeout_seconds: int = 90,
     ) -> None:

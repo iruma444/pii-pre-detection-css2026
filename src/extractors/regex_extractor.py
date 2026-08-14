@@ -14,7 +14,9 @@ class RegexExtractor:
     """
 
     PATTERNS: dict[PIIType, str] = {
-        PIIType.EMAIL: r"[A-Za-z0-9_.+-]+@[A-Za-z0-9-]+\.[A-Za-z0-9-.]+",
+        PIIType.EMAIL: (
+            r"[A-Za-z0-9_.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+"
+        ),
         PIIType.PHONE: (
             r"(?<![0-9０-９])"
             r"(?:(?:0|０|\+81|＋８１)[-ー−－\s0-9０-９]{9,18}"

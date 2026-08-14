@@ -26,6 +26,8 @@ The benchmark compares the following ablations on the same held-out data:
 5. `llm_only` = full-text local-LLM extraction using the same Ollama model
 6. Amazon Bedrock Guardrails can be rerun separately on the exact same JSONL sample
 
+For the CSS 2026 experiments, the local LLM is fixed to **`gpt-oss:20b`** for both `proposed` and `llm_only`. This avoids conflating architectural effects with differences in model family or parameter scale.
+
 ## Metrics
 
 The benchmark reports:
@@ -89,13 +91,13 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-For local-LLM experiments, install and start Ollama separately, then pull the model configured in `configs/benchmark.yaml`:
+For local-LLM experiments, install and start Ollama separately, then pull the model fixed in `configs/benchmark.yaml`:
 
 ```bash
-ollama pull qwen2.5:7b
+ollama pull gpt-oss:20b
 ```
 
-The proposed and `llm_only` conditions use the same model and temperature setting.
+The proposed and `llm_only` conditions use the same `gpt-oss:20b` model and temperature setting (`0.0`). The exact Ollama model metadata and execution environment are recorded in `results/environment.json` at benchmark time.
 
 ## Build the held-out 500-example benchmark
 
@@ -155,7 +157,7 @@ This keeps the service comparison on the same texts and the same target taxonomy
 
 ## Interpretation of LLM call rate
 
-`llm_only` sends every document to the local model, so its document-level call rate should be 1.0 unless calls fail before invocation. The proposed method invokes the model only when at least one ambiguous candidate survives the deterministic extraction stages. This makes LLM call rate and latency direct measurements of the claimed lightweight architecture rather than assumptions.
+`llm_only` sends every document to `gpt-oss:20b`, so its document-level call rate should be 1.0 unless calls fail before invocation. The proposed method invokes the same model only when at least one ambiguous candidate survives the deterministic extraction stages. This makes LLM call rate and latency direct measurements of the claimed lightweight architecture rather than assumptions.
 
 ## Important methodological limitation
 

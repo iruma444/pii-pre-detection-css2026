@@ -93,6 +93,29 @@ def convert_example(example: dict, index: int) -> dict:
     }
 
 
+def reservoir_sample_japanese(stream, n: int, seed: int) -> tuple[list[tuple[int, dict]], int]:
+    rng = random.Random(seed)
+    reservoir: list[tuple[int, dict]] = []
+    japanese_count = 0
+
+    for source_index, example in enumerate(stream):
+        if not _is_japanese(example):
+            continue
+
+        japanese_count += 1
+        item = (source_index, dict(example))
+        if len(reservoir) < n:
+            reservoir.append(item)
+            continue
+
+        replacement_index = rng.randrange(japanese_count)
+        if replacement_index < n:
+            reservoir[replacement_index] = item
+
+    reservoir.sort(key=lambda pair: pair[0])
+    return reservoir, japanese_count
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", default="datasets/ai4privacy_ja_500.jsonl")
@@ -104,21 +127,22 @@ def main() -> None:
     try:
         from datasets import load_dataset
     except ImportError as exc:
-        raise SystemExit("Install the optional benchmark dependency: pip install datasets") from exc
+        raise SystemExit("Install the benchmark dependency: pip install datasets") from exc
 
-    ds = load_dataset(DATASET_NAME, split=args.split)
-    japanese_indices = [i for i, example in enumerate(ds) if _is_japanese(example)]
-    if len(japanese_indices) < args.n:
-        raise SystemExit(f"Only {len(japanese_indices)} Japanese examples were found; requested {args.n}.")
-
-    rng = random.Random(args.seed)
-    sampled_indices = rng.sample(japanese_indices, args.n)
+    # Streaming avoids materializing the multi-GB dataset locally. The one-pass
+    # reservoir sampler remains deterministic for a fixed dataset revision/order.
+    stream = load_dataset(DATASET_NAME, split=args.split, streaming=True)
+    sampled, japanese_pool_size = reservoir_sample_japanese(stream, args.n, args.seed)
+    if japanese_pool_size < args.n:
+        raise SystemExit(
+            f"Only {japanese_pool_size} Japanese examples were found; requested {args.n}."
+        )
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8") as f:
-        for idx in sampled_indices:
-            record = convert_example(ds[idx], idx)
+        for source_index, example in sampled:
+            record = convert_example(example, source_index)
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     manifest = {
@@ -126,7 +150,10 @@ def main() -> None:
         "split": args.split,
         "n": args.n,
         "seed": args.seed,
-        "japanese_pool_size": len(japanese_indices),
+        "sampling": "one-pass reservoir sampling over streaming split",
+        "japanese_pool_size": japanese_pool_size,
+        "source_indices": [index for index, _ in sampled],
+        "sample_ids": [str(example.get("uid", index)) for index, example in sampled],
         "output": str(output),
         "label_map": LABEL_MAP,
     }

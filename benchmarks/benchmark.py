@@ -251,6 +251,12 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
+def _method_uses_llm(method_cfg: dict) -> bool:
+    return str(method_cfg.get("mode", "pipeline")) == "llm_only" or bool(
+        method_cfg.get("use_llm", True)
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run CSS 2026 PII ablation benchmark")
     parser.add_argument("--config", default="configs/benchmark.yaml")
@@ -271,12 +277,17 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     requested = set(args.method or [])
+    selected_methods = [
+        (name, method_cfg)
+        for name, method_cfg in cfg["methods"].items()
+        if not requested or name in requested
+    ]
+    include_ollama = any(_method_uses_llm(method_cfg) for _, method_cfg in selected_methods)
+
     summaries: list[dict] = []
     all_per_document: list[dict] = []
     all_per_type: list[dict] = []
-    for method_name, method_cfg in cfg["methods"].items():
-        if requested and method_name not in requested:
-            continue
+    for method_name, method_cfg in selected_methods:
         print(f"[benchmark] method={method_name} documents={len(records)}", flush=True)
         summary, per_document, per_type = evaluate_method(
             method_name,
@@ -303,12 +314,15 @@ def main() -> None:
         for row in all_per_document:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-    environment = collect_environment(str(cfg["llm"]["model"]))
+    environment = collect_environment(
+        str(cfg["llm"]["model"]), include_ollama=include_ollama
+    )
     environment.update(
         {
             "config": cfg,
             "dataset_records_used": len(records),
             "generated_at_unix": time.time(),
+            "ollama_probed": include_ollama,
         }
     )
     (output_dir / "environment.json").write_text(

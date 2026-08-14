@@ -29,7 +29,7 @@ class LlmRefiner:
     def __init__(
         self,
         model_name: str = "gpt-oss:20b",
-        api_url: str = "http://localhost:11434/api/generate",
+        api_url: str = "http://localhost:11434/api/chat",
         timeout_seconds: int = 90,
     ) -> None:
         self.model_name = model_name
@@ -64,9 +64,13 @@ class LlmRefiner:
             )
 
         prompt = self._build_prompt(text, payload_candidates)
+        # Ollama documents GPT-OSS structured JSON through /api/chat. Keeping
+        # the same prompt and JSON mode avoids changing the semantic benchmark
+        # condition while using the endpoint that exposes final assistant
+        # content separately from the model's thinking trace.
         data = {
             "model": self.model_name,
-            "prompt": prompt,
+            "messages": [{"role": "user", "content": prompt}],
             "stream": False,
             "format": "json",
             "options": {"temperature": 0.0},
@@ -82,7 +86,8 @@ class LlmRefiner:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout_seconds) as response:
                 raw = json.loads(response.read().decode("utf-8"))
-            decisions = self._parse_response(raw.get("response", ""))
+            response_text = self._response_text(raw)
+            decisions = self._parse_response(response_text)
             return self._apply_decisions(candidates, decisions)
         except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError, OSError) as exc:
             self.stats.failures += 1
@@ -94,9 +99,18 @@ class LlmRefiner:
             # than discarding it when the refinement model is unavailable.
             return candidates
         finally:
-            # Account for each call exactly once. Previously, parse failures were
-            # counted once before parsing and a second time in the exception path.
             self.stats.seconds += time.perf_counter() - started
+
+    @staticmethod
+    def _response_text(raw: dict) -> str:
+        """Extract final assistant content from Ollama chat/generate responses."""
+        message = raw.get("message")
+        if isinstance(message, dict):
+            content = message.get("content", "")
+            if isinstance(content, str):
+                return content
+        response = raw.get("response", "")
+        return response if isinstance(response, str) else ""
 
     def _build_prompt(self, text: str, candidates: list[dict]) -> str:
         candidates_json = json.dumps(candidates, ensure_ascii=False, indent=2)

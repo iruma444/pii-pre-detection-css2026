@@ -30,7 +30,7 @@ class LlmRefiner:
         self,
         model_name: str = "gpt-oss:20b",
         api_url: str = "http://localhost:11434/api/chat",
-        timeout_seconds: int = 90,
+        timeout_seconds: int = 180,
     ) -> None:
         self.model_name = model_name
         self.api_url = api_url

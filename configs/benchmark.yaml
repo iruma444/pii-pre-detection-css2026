@@ -4,6 +4,18 @@ dataset:
   sample_size: 500
   seed: 42
 
+evaluation:
+  # Common categories supported by both the proposed detector and the cloud baseline.
+  # AGE and DRIVER_ID remain part of the separate Bedrock exploratory analysis,
+  # but are not included in the proposed-method comparison because the original
+  # detector does not implement them.
+  target_types:
+    - PERSON
+    - EMAIL
+    - PHONE
+    - ADDRESS
+    - CREDIT_CARD
+
 llm:
   backend: ollama
   model: qwen2.5:7b

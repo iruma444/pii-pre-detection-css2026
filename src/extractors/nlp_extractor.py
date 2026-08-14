@@ -9,6 +9,11 @@ class NlpExtractor:
     The benchmark must record whether ja_ginza was actually available. If it is
     unavailable, this extractor returns no candidates instead of silently using
     another model.
+
+    Only the shared ``tok2vec`` representation and ``ner`` component are enabled.
+    The benchmark consumes only ``doc.ents``; dependency parsing, morphology,
+    attribute rules, compound splitting and bunsetsu recognition are unrelated to
+    that output and add substantial native CPU work on every document.
     """
 
     LABEL_MAP = {
@@ -26,7 +31,11 @@ class NlpExtractor:
         try:
             import spacy
 
-            self.nlp = spacy.load(model_name)
+            # ja_ginza is a multi-task pipeline. For this extractor we only need
+            # named entities, so do not execute parser/morphologizer/GiNZA's
+            # downstream syntactic components. Keep tok2vec because the NER model
+            # consumes the shared token representations.
+            self.nlp = spacy.load(model_name, enable=["tok2vec", "ner"])
             self.is_available = True
         except Exception:
             self.nlp = None

@@ -74,6 +74,8 @@ class FullTextLlmExtractor:
             raise ValueError("think_level must be one of: low, medium, high")
         if num_ctx <= 0:
             raise ValueError("num_ctx must be positive")
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
 
         self.model_name = model_name
         self.api_url = api_url
@@ -123,6 +125,7 @@ startは0始まり、endはPythonスライスと同じく終端を含みませ�
         self.last_response_meta = {
             "think_level": self.think_level,
             "num_ctx": self.num_ctx,
+            "timeout_seconds": self.timeout_seconds,
         }
         try:
             with urllib.request.urlopen(req, timeout=self.timeout_seconds) as response:
@@ -134,6 +137,7 @@ startは0始まり、endはPythonスライスと同じく終端を含みませ�
             self.last_response_meta = {
                 "think_level": self.think_level,
                 "num_ctx": self.num_ctx,
+                "timeout_seconds": self.timeout_seconds,
                 "done_reason": raw.get("done_reason"),
                 "prompt_eval_count": raw.get("prompt_eval_count"),
                 "eval_count": raw.get("eval_count"),
@@ -166,6 +170,7 @@ startは0始まり、endはPythonスライスと同じく終端を含みませ�
             "content_chars",
             "think_level",
             "num_ctx",
+            "timeout_seconds",
         )
         return " ".join(f"{key}={meta.get(key)}" for key in keys)
 

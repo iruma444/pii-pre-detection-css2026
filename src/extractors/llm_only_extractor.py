@@ -40,8 +40,8 @@ class FullTextLlmExtractor:
     def __init__(
         self,
         model_name: str = "gpt-oss:20b",
-        api_url: str = "http://localhost:11434/api/generate",
-        timeout_seconds: int = 90,
+        api_url: str = "http://localhost:11434/api/chat",
+        timeout_seconds: int = 180,
     ) -> None:
         self.model_name = model_name
         self.api_url = api_url
@@ -63,7 +63,7 @@ startは0始まり、endはPythonスライスと同じく終端を含みませ�
 """
         request_data = {
             "model": self.model_name,
-            "prompt": prompt,
+            "messages": [{"role": "user", "content": prompt}],
             "stream": False,
             "format": "json",
             "options": {"temperature": 0.0},
@@ -79,12 +79,27 @@ startは0始まり、endはPythonスライスと同じく終端を含みませ�
         try:
             with urllib.request.urlopen(req, timeout=self.timeout_seconds) as response:
                 raw = json.loads(response.read().decode("utf-8"))
-            self.stats.seconds += time.perf_counter() - started
-            return self._parse_entities(text, raw.get("response", ""))
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
-            self.stats.seconds += time.perf_counter() - started
+            return self._parse_entities(text, self._response_text(raw))
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
             self.stats.failures += 1
+            print(
+                f"[llm-only] extraction failed: {type(exc).__name__}: {exc}",
+                flush=True,
+            )
             return []
+        finally:
+            self.stats.seconds += time.perf_counter() - started
+
+    @staticmethod
+    def _response_text(raw: dict) -> str:
+        """Extract final assistant content from Ollama chat/generate responses."""
+        message = raw.get("message")
+        if isinstance(message, dict):
+            content = message.get("content", "")
+            if isinstance(content, str):
+                return content
+        response = raw.get("response", "")
+        return response if isinstance(response, str) else ""
 
     def _parse_entities(self, source: str, response_text: str) -> list[PIIEntity]:
         match = re.search(r"\{.*\}", response_text, re.DOTALL)

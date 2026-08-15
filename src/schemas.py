@@ -39,6 +39,11 @@ class PipelineConfig:
     use_nlp: bool = True
     use_llm: bool = True
     llm_model: str = "gpt-oss:20b"
+    # None preserves Ollama/model defaults for existing benchmark entry points.
+    # Durable experiments can set these explicitly for matched comparisons.
+    llm_think_level: str | None = None
+    llm_num_ctx: int | None = None
+    llm_timeout_seconds: int = 180
 
 
 @dataclass

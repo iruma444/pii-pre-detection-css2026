@@ -13,6 +13,31 @@ from benchmarks.durable_ginza import _repair_and_load_completed
 from src.extractors.llm_only_extractor import FullTextLlmExtractor
 
 
+def _validate_resume_settings(path: Path, think_level: str, num_ctx: int) -> None:
+    """Refuse to append rows produced under different inference settings."""
+    if not path.exists():
+        return
+
+    with path.open("r", encoding="utf-8") as f:
+        for line_number, line in enumerate(f, 1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            existing_think = row.get("llm_think_level")
+            existing_ctx = row.get("llm_num_ctx")
+            if existing_think is None or existing_ctx is None:
+                raise SystemExit(
+                    f"Existing row {line_number} lacks llm_think_level/llm_num_ctx. "
+                    "Move this older smoke result aside before starting the formal run."
+                )
+            if str(existing_think) != think_level or int(existing_ctx) != num_ctx:
+                raise SystemExit(
+                    "Refusing to mix LLM-only inference settings in one JSONL: "
+                    f"existing think={existing_think} num_ctx={existing_ctx}, "
+                    f"requested think={think_level} num_ctx={num_ctx}."
+                )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Durable, resumable full-text local-LLM benchmark runner"
@@ -46,6 +71,7 @@ def main() -> None:
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     completed = _repair_and_load_completed(output)
+    _validate_resume_settings(output, args.think_level, args.num_ctx)
 
     remaining = sum(1 for record in records if str(record["id"]) not in completed)
     print(

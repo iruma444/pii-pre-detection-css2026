@@ -13,7 +13,12 @@ from benchmarks.durable_ginza import _repair_and_load_completed
 from src.extractors.llm_only_extractor import FullTextLlmExtractor
 
 
-def _validate_resume_settings(path: Path, think_level: str, num_ctx: int) -> None:
+def _validate_resume_settings(
+    path: Path,
+    think_level: str,
+    num_ctx: int,
+    timeout_seconds: int,
+) -> None:
     """Refuse to append rows produced under different inference settings."""
     if not path.exists():
         return
@@ -25,16 +30,22 @@ def _validate_resume_settings(path: Path, think_level: str, num_ctx: int) -> Non
             row = json.loads(line)
             existing_think = row.get("llm_think_level")
             existing_ctx = row.get("llm_num_ctx")
-            if existing_think is None or existing_ctx is None:
+            existing_timeout = row.get("llm_timeout_seconds")
+            if existing_think is None or existing_ctx is None or existing_timeout is None:
                 raise SystemExit(
-                    f"Existing row {line_number} lacks llm_think_level/llm_num_ctx. "
+                    f"Existing row {line_number} lacks formal LLM-only inference settings. "
                     "Move this older smoke result aside before starting the formal run."
                 )
-            if str(existing_think) != think_level or int(existing_ctx) != num_ctx:
+            if (
+                str(existing_think) != think_level
+                or int(existing_ctx) != num_ctx
+                or int(existing_timeout) != timeout_seconds
+            ):
                 raise SystemExit(
                     "Refusing to mix LLM-only inference settings in one JSONL: "
-                    f"existing think={existing_think} num_ctx={existing_ctx}, "
-                    f"requested think={think_level} num_ctx={num_ctx}."
+                    f"existing think={existing_think} num_ctx={existing_ctx} "
+                    f"timeout={existing_timeout}, requested think={think_level} "
+                    f"num_ctx={num_ctx} timeout={timeout_seconds}."
                 )
 
 
@@ -60,7 +71,15 @@ def main() -> None:
         default=4096,
         help="Ollama context length for each request.",
     )
+    parser.add_argument(
+        "--timeout-seconds",
+        type=int,
+        default=180,
+        help="Per-request Ollama timeout. Persisted to prevent mixed formal runs.",
+    )
     args = parser.parse_args()
+    if args.timeout_seconds <= 0:
+        raise SystemExit("--timeout-seconds must be positive")
 
     cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
     records = load_dataset(Path(cfg["dataset"]["path"]))
@@ -71,17 +90,24 @@ def main() -> None:
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     completed = _repair_and_load_completed(output)
-    _validate_resume_settings(output, args.think_level, args.num_ctx)
+    _validate_resume_settings(
+        output,
+        args.think_level,
+        args.num_ctx,
+        args.timeout_seconds,
+    )
 
     remaining = sum(1 for record in records if str(record["id"]) not in completed)
     print(
         f"[durable-llm-only] total={len(records)} completed={len(completed)} "
-        f"remaining={remaining} think={args.think_level} num_ctx={args.num_ctx}",
+        f"remaining={remaining} think={args.think_level} num_ctx={args.num_ctx} "
+        f"timeout={args.timeout_seconds}s",
         flush=True,
     )
 
     extractor = FullTextLlmExtractor(
         model_name=str(cfg["llm"]["model"]),
+        timeout_seconds=args.timeout_seconds,
         think_level=args.think_level,
         num_ctx=args.num_ctx,
     )
@@ -119,6 +145,7 @@ def main() -> None:
                 "llm_failures": llm_failures,
                 "llm_think_level": meta.get("think_level", args.think_level),
                 "llm_num_ctx": meta.get("num_ctx", args.num_ctx),
+                "llm_timeout_seconds": meta.get("timeout_seconds", args.timeout_seconds),
                 "llm_done_reason": meta.get("done_reason"),
                 "llm_prompt_eval_count": meta.get("prompt_eval_count"),
                 "llm_eval_count": meta.get("eval_count"),

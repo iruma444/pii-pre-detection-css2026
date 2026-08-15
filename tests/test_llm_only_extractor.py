@@ -10,6 +10,16 @@ def test_response_text_prefers_chat_message_content():
     assert FullTextLlmExtractor._response_text(raw) == '{"entities":[]}'
 
 
+def test_response_schema_requires_entity_fields():
+    schema = FullTextLlmExtractor.RESPONSE_SCHEMA
+    assert schema["required"] == ["entities"]
+    item = schema["properties"]["entities"]["items"]
+    assert set(item["required"]) == {"type", "text", "start", "end"}
+    assert set(item["properties"]["type"]["enum"]) == set(
+        FullTextLlmExtractor.ALLOWED_TYPES.keys()
+    )
+
+
 def test_parse_entities_accepts_valid_exact_span():
     extractor = FullTextLlmExtractor()
     source = "連絡先は田中太郎です。"

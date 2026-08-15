@@ -19,7 +19,16 @@ class PiiPipeline:
         self.regex_extractor = RegexExtractor() if self.config.use_regex else None
         self.dict_extractor = DictExtractor() if self.config.use_dict else None
         self.nlp_extractor = NlpExtractor() if self.config.use_nlp else None
-        self.llm_refiner = LlmRefiner(self.config.llm_model) if self.config.use_llm else None
+        self.llm_refiner = (
+            LlmRefiner(
+                self.config.llm_model,
+                timeout_seconds=self.config.llm_timeout_seconds,
+                think_level=self.config.llm_think_level,
+                num_ctx=self.config.llm_num_ctx,
+            )
+            if self.config.use_llm
+            else None
+        )
         self.stats = RuntimeStats()
 
     @property

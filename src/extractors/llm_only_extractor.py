@@ -67,11 +67,21 @@ class FullTextLlmExtractor:
         model_name: str = "gpt-oss:20b",
         api_url: str = "http://localhost:11434/api/chat",
         timeout_seconds: int = 180,
+        think_level: str = "medium",
+        num_ctx: int = 4096,
     ) -> None:
+        if think_level not in {"low", "medium", "high"}:
+            raise ValueError("think_level must be one of: low, medium, high")
+        if num_ctx <= 0:
+            raise ValueError("num_ctx must be positive")
+
         self.model_name = model_name
         self.api_url = api_url
         self.timeout_seconds = timeout_seconds
+        self.think_level = think_level
+        self.num_ctx = num_ctx
         self.stats = LLMOnlyStats()
+        self.last_response_meta: dict[str, object] = {}
 
     def extract(self, text: str) -> list[PIIEntity]:
         schema_json = json.dumps(self.RESPONSE_SCHEMA, ensure_ascii=False)
@@ -93,11 +103,14 @@ startは0始まり、endはPythonスライスと同じく終端を含みませ�
             "model": self.model_name,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
+            "think": self.think_level,
             # Ollama supports a JSON Schema object in `format`; this is more
-            # constrained than the generic "json" mode and prevents malformed
-            # or prose-only outputs without changing the extraction task.
+            # constrained than the generic "json" mode.
             "format": self.RESPONSE_SCHEMA,
-            "options": {"temperature": 0.0},
+            "options": {
+                "temperature": 0.0,
+                "num_ctx": self.num_ctx,
+            },
         }
         req = urllib.request.Request(
             self.api_url,
@@ -107,10 +120,31 @@ startは0始まり、endはPythonスライスと同じく終端を含みませ�
 
         started = time.perf_counter()
         self.stats.calls += 1
+        self.last_response_meta = {
+            "think_level": self.think_level,
+            "num_ctx": self.num_ctx,
+        }
         try:
             with urllib.request.urlopen(req, timeout=self.timeout_seconds) as response:
                 raw = json.loads(response.read().decode("utf-8"))
+
             response_text = self._response_text(raw)
+            message = raw.get("message")
+            thinking = message.get("thinking", "") if isinstance(message, dict) else ""
+            self.last_response_meta = {
+                "think_level": self.think_level,
+                "num_ctx": self.num_ctx,
+                "done_reason": raw.get("done_reason"),
+                "prompt_eval_count": raw.get("prompt_eval_count"),
+                "eval_count": raw.get("eval_count"),
+                "thinking_chars": len(thinking) if isinstance(thinking, str) else 0,
+                "content_chars": len(response_text),
+            }
+
+            if not re.search(r"\{.*\}", response_text, re.DOTALL):
+                raise ValueError(
+                    "No JSON object in response; " + self._meta_text(self.last_response_meta)
+                )
             return self._parse_entities(text, response_text)
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
             self.stats.failures += 1
@@ -121,6 +155,19 @@ startは0始まり、endはPythonスライスと同じく終端を含みませ�
             return []
         finally:
             self.stats.seconds += time.perf_counter() - started
+
+    @staticmethod
+    def _meta_text(meta: dict[str, object]) -> str:
+        keys = (
+            "done_reason",
+            "prompt_eval_count",
+            "eval_count",
+            "thinking_chars",
+            "content_chars",
+            "think_level",
+            "num_ctx",
+        )
+        return " ".join(f"{key}={meta.get(key)}" for key in keys)
 
     @staticmethod
     def _response_text(raw: dict) -> str:

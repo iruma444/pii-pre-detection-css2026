@@ -14,6 +14,42 @@ from src.pipeline import PiiPipeline
 from src.schemas import PipelineConfig
 
 
+def _validate_resume_settings(
+    path: Path,
+    think_level: str,
+    num_ctx: int,
+    timeout_seconds: int,
+) -> None:
+    """Refuse to append rows produced under different LLM inference settings."""
+    if not path.exists():
+        return
+
+    with path.open("r", encoding="utf-8") as f:
+        for line_number, line in enumerate(f, 1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            existing_think = row.get("llm_think_level")
+            existing_ctx = row.get("llm_num_ctx")
+            existing_timeout = row.get("llm_timeout_seconds")
+            if existing_think is None or existing_ctx is None or existing_timeout is None:
+                raise SystemExit(
+                    f"Existing row {line_number} lacks matched LLM settings. "
+                    "Use a fresh output path for this experiment."
+                )
+            if (
+                str(existing_think) != think_level
+                or int(existing_ctx) != num_ctx
+                or int(existing_timeout) != timeout_seconds
+            ):
+                raise SystemExit(
+                    "Refusing to mix proposed-method inference settings in one JSONL: "
+                    f"existing think={existing_think} num_ctx={existing_ctx} "
+                    f"timeout={existing_timeout}, requested think={think_level} "
+                    f"num_ctx={num_ctx} timeout={timeout_seconds}."
+                )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Durable, resumable proposed-method benchmark runner"
@@ -24,6 +60,24 @@ def main() -> None:
         default="results/proposed_500/chunks/live/per_document.jsonl",
     )
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--think-level",
+        choices=("low", "medium", "high"),
+        default="medium",
+        help="GPT-OSS reasoning effort for the selective LLM refiner.",
+    )
+    parser.add_argument(
+        "--num-ctx",
+        type=int,
+        default=4096,
+        help="Ollama context length for each LLM refinement request.",
+    )
+    parser.add_argument(
+        "--timeout-seconds",
+        type=int,
+        default=180,
+        help="Per-request Ollama timeout.",
+    )
     args = parser.parse_args()
 
     cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
@@ -35,11 +89,18 @@ def main() -> None:
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     completed = _repair_and_load_completed(output)
+    _validate_resume_settings(
+        output,
+        args.think_level,
+        args.num_ctx,
+        args.timeout_seconds,
+    )
 
     remaining = sum(1 for record in records if str(record["id"]) not in completed)
     print(
         f"[durable-proposed] total={len(records)} completed={len(completed)} "
-        f"remaining={remaining}",
+        f"remaining={remaining} think={args.think_level} "
+        f"num_ctx={args.num_ctx} timeout={args.timeout_seconds}s",
         flush=True,
     )
 
@@ -50,6 +111,9 @@ def main() -> None:
             use_nlp=True,
             use_llm=True,
             llm_model=str(cfg["llm"]["model"]),
+            llm_think_level=args.think_level,
+            llm_num_ctx=args.num_ctx,
+            llm_timeout_seconds=args.timeout_seconds,
         )
     )
     if pipeline.ginza_available is not True:
@@ -87,6 +151,9 @@ def main() -> None:
                 "llm_calls": llm_calls,
                 "llm_seconds": llm_seconds,
                 "llm_failures": llm_failures,
+                "llm_think_level": args.think_level,
+                "llm_num_ctx": args.num_ctx,
+                "llm_timeout_seconds": args.timeout_seconds,
                 "ginza_available": True,
                 "truth": [entity.to_dict() for entity in truths],
                 "predictions": [entity.to_dict() for entity in predictions],

@@ -31,10 +31,21 @@ class LlmRefiner:
         model_name: str = "gpt-oss:20b",
         api_url: str = "http://localhost:11434/api/chat",
         timeout_seconds: int = 180,
+        think_level: str | None = None,
+        num_ctx: int | None = None,
     ) -> None:
+        if think_level is not None and think_level not in {"low", "medium", "high"}:
+            raise ValueError("think_level must be one of: low, medium, high")
+        if num_ctx is not None and num_ctx <= 0:
+            raise ValueError("num_ctx must be positive")
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+
         self.model_name = model_name
         self.api_url = api_url
         self.timeout_seconds = timeout_seconds
+        self.think_level = think_level
+        self.num_ctx = num_ctx
         self.stats = LLMCallStats()
 
     @staticmethod
@@ -64,17 +75,20 @@ class LlmRefiner:
             )
 
         prompt = self._build_prompt(text, payload_candidates)
-        # Ollama documents GPT-OSS structured JSON through /api/chat. Keeping
-        # the same prompt and JSON mode avoids changing the semantic benchmark
-        # condition while using the endpoint that exposes final assistant
-        # content separately from the model's thinking trace.
-        data = {
+        options: dict[str, object] = {"temperature": 0.0}
+        if self.num_ctx is not None:
+            options["num_ctx"] = self.num_ctx
+
+        data: dict[str, object] = {
             "model": self.model_name,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
             "format": "json",
-            "options": {"temperature": 0.0},
+            "options": options,
         }
+        if self.think_level is not None:
+            data["think"] = self.think_level
+
         req = urllib.request.Request(
             self.api_url,
             data=json.dumps(data, ensure_ascii=False).encode("utf-8"),

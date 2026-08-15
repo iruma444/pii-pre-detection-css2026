@@ -37,6 +37,31 @@ class FullTextLlmExtractor:
         "IBAN": PIIType.IBAN,
     }
 
+    RESPONSE_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "entities": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "enum": list(ALLOWED_TYPES.keys()),
+                        },
+                        "text": {"type": "string"},
+                        "start": {"type": "integer"},
+                        "end": {"type": "integer"},
+                    },
+                    "required": ["type", "text", "start", "end"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["entities"],
+        "additionalProperties": False,
+    }
+
     def __init__(
         self,
         model_name: str = "gpt-oss:20b",
@@ -49,23 +74,29 @@ class FullTextLlmExtractor:
         self.stats = LLMOnlyStats()
 
     def extract(self, text: str) -> list[PIIEntity]:
+        schema_json = json.dumps(self.RESPONSE_SCHEMA, ensure_ascii=False)
         prompt = f"""あなたはPII抽出器です。次の文章に実際に現れる個人識別情報だけを抽出してください。
 対象タイプは PERSON, EMAIL, PHONE, ADDRESS, AGE, DRIVER_ID, CREDIT_CARD, BANK_ACCOUNT, IBAN です。
 
 文章:
 {text}
 
-出力はJSONのみとし、各エンティティについてtype, text, start, endを返してください。
+各エンティティについてtype, text, start, endを返してください。
 startは0始まり、endはPythonスライスと同じく終端を含みません。
 候補を推測・補完せず、文章中に存在する文字列だけを返してください。
+該当するPIIがなければentitiesを空配列にしてください。
 
-{{"entities":[{{"type":"PERSON","text":"田中太郎","start":0,"end":4}}]}}
+必ず次のJSON Schemaに従うJSONだけを返してください:
+{schema_json}
 """
         request_data = {
             "model": self.model_name,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
-            "format": "json",
+            # Ollama supports a JSON Schema object in `format`; this is more
+            # constrained than the generic "json" mode and prevents malformed
+            # or prose-only outputs without changing the extraction task.
+            "format": self.RESPONSE_SCHEMA,
             "options": {"temperature": 0.0},
         }
         req = urllib.request.Request(
@@ -79,7 +110,8 @@ startは0始まり、endはPythonスライスと同じく終端を含みませ�
         try:
             with urllib.request.urlopen(req, timeout=self.timeout_seconds) as response:
                 raw = json.loads(response.read().decode("utf-8"))
-            return self._parse_entities(text, self._response_text(raw))
+            response_text = self._response_text(raw)
+            return self._parse_entities(text, response_text)
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
             self.stats.failures += 1
             print(

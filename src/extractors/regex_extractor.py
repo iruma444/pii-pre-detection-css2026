@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from src.schemas import PIIEntity, PIIType
 
@@ -17,23 +18,20 @@ class RegexExtractor:
     ADDRESS, and generated PHONE/CREDIT_CARD values may use formatting that is
     broader than the narrow Japanese examples used in the early pilot.
 
-    Internationalized email local parts are deliberately not handled by this
-    regex rule. In unsegmented Japanese prose, a Unicode ``\\w+`` local-part
-    pattern can absorb ordinary sentence text immediately before ``@``. Those
-    cases are instead left to the GiNZA ``Email`` candidate mapping, while the
-    regex baseline keeps a high-precision ASCII local-part rule.
+    EMAIL uses a two-tier strategy. Ordinary ASCII local parts are emitted as
+    high-confidence exact regex matches. If an ``@domain`` is not already
+    covered by that rule, a Unicode-capable, recall-first candidate is generated
+    by scanning left across characters that are plausible in an internationalized
+    local part. In unsegmented Japanese text this candidate may intentionally be
+    wider than the true email span; it is marked low-confidence so the proposed
+    pipeline can send it to the local LLM for boundary refinement.
     """
 
     PATTERNS: dict[PIIType, str] = {
-        # Keep the local part ASCII here so Japanese prose immediately before an
-        # address is never swallowed into the match. Internationalized local
-        # parts are covered by the NER stage in Regex+Dict+GiNZA / Proposed.
         PIIType.EMAIL: (
             r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+"
             r"(?:\.[A-Za-z0-9-]+)+"
         ),
-        # Accept common Japanese/international separators, including dots used
-        # by some generated Ai4Privacy telephone values.
         PIIType.PHONE: (
             r"(?<![0-9０-９])"
             r"(?:(?:0|０|\+81|＋８１)[-ー−－.．\s0-9０-９]{9,18}"
@@ -41,16 +39,10 @@ class RegexExtractor:
             r"[-ー−－.．\s]?[0-9０-９]{3,4})"
             r"(?![0-9０-９])"
         ),
-        # Japanese postal codes are part of ADDRESS in the benchmark adapter.
-        # Require the standard 3-4 separator form to avoid treating every
-        # seven-digit identifier as an address.
         PIIType.ADDRESS: (
             r"(?<![0-9０-９])(?:〒\s*)?[0-9０-９]{3}[-ー−－][0-9０-９]{4}"
             r"(?![0-9０-９])"
         ),
-        # Ai4Privacy CREDITCARDNUMBER values are synthetic and can be broader
-        # than the 14--16 digit range used by the early pilot. Cover the common
-        # 13--19 digit PAN range while retaining the existing separated format.
         PIIType.CREDIT_CARD: (
             r"(?<![0-9０-９])(?:[0-9０-９]{13,19}"
             r"|(?:[0-9０-９]{4}[-ー−－\s]+){3}[0-9０-９]{3,4})(?![0-9０-９])"
@@ -65,18 +57,64 @@ class RegexExtractor:
         ),
     }
 
+    EMAIL_DOMAIN = re.compile(r"@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+    EMAIL_LOCAL_PUNCT = frozenset(".!#$%&'*+/=?^_`{|}~-")
+
+    @classmethod
+    def _is_unicode_email_local_char(cls, ch: str) -> bool:
+        if ch in cls.EMAIL_LOCAL_PUNCT:
+            return True
+        category = unicodedata.category(ch)
+        return bool(category) and category[0] in {"L", "M", "N"}
+
+    @classmethod
+    def _broad_unicode_email_candidates(
+        cls, text: str, exact_emails: list[PIIEntity]
+    ) -> list[PIIEntity]:
+        output: list[PIIEntity] = []
+        for domain in cls.EMAIL_DOMAIN.finditer(text):
+            at = domain.start()
+            if any(e.start <= at < e.end for e in exact_emails):
+                continue
+
+            left = at
+            while left > 0 and cls._is_unicode_email_local_char(text[left - 1]):
+                left -= 1
+            if left == at:
+                continue
+
+            local = text[left:at]
+            if local.isascii():
+                continue
+
+            output.append(
+                PIIEntity(
+                    type=PIIType.EMAIL,
+                    text=text[left : domain.end()],
+                    start=left,
+                    end=domain.end(),
+                    score=0.6,
+                    source="regex_email_unicode_broad",
+                )
+            )
+        return output
+
     def extract(self, text: str) -> list[PIIEntity]:
         entities: list[PIIEntity] = []
+        exact_emails: list[PIIEntity] = []
         for pii_type, pattern in self.PATTERNS.items():
             for match in re.finditer(pattern, text):
-                entities.append(
-                    PIIEntity(
-                        type=pii_type,
-                        text=match.group(0),
-                        start=match.start(),
-                        end=match.end(),
-                        score=0.8 if pii_type == PIIType.BANK_ACCOUNT else 1.0,
-                        source="regex",
-                    )
+                entity = PIIEntity(
+                    type=pii_type,
+                    text=match.group(0),
+                    start=match.start(),
+                    end=match.end(),
+                    score=0.8 if pii_type == PIIType.BANK_ACCOUNT else 1.0,
+                    source="regex",
                 )
+                entities.append(entity)
+                if pii_type == PIIType.EMAIL:
+                    exact_emails.append(entity)
+
+        entities.extend(self._broad_unicode_email_candidates(text, exact_emails))
         return entities

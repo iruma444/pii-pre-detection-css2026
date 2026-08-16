@@ -6,6 +6,13 @@ from src.schemas import PIIEntity, PIIType
 class NlpExtractor:
     """GiNZA-based Japanese NER extractor.
 
+    GiNZA v4+ exposes Sekine Extended Named Entity labels through
+    ``Span.label_`` (for example ``Person``, ``City`` and ``Province``), not
+    only the coarse OntoNotes labels such as ``PERSON`` and ``GPE``.  The CSS
+    benchmark uses a deliberately small PII taxonomy, so we map only ENE
+    categories that correspond directly to the Ai4Privacy labels used by the
+    benchmark.
+
     The benchmark must record whether ja_ginza was actually available. If it is
     unavailable, this extractor returns no candidates instead of silently using
     another model.
@@ -16,12 +23,34 @@ class NlpExtractor:
     that output and add substantial native CPU work on every document.
     """
 
-    LABEL_MAP = {
+    # Ai4Privacy adapter targets:
+    #   GIVENNAME/SURNAME -> PERSON
+    #   STREET/CITY/ZIPCODE/BUILDINGNUM -> ADDRESS
+    #   EMAIL -> EMAIL
+    #   TELEPHONENUM -> PHONE
+    #
+    # Keep this mapping taxonomy-driven. Do not add labels because of a specific
+    # held-out example.
+    ENE_LABEL_MAP = {
+        "Person": PIIType.PERSON,
+        "Province": PIIType.ADDRESS,
+        "City": PIIType.ADDRESS,
+        "County": PIIType.ADDRESS,
+        "Road": PIIType.ADDRESS,
+        "Postal_Address": PIIType.ADDRESS,
+        "Email": PIIType.EMAIL,
+        "Phone_Number": PIIType.PHONE,
+    }
+
+    # Backward compatibility for models/pipelines that expose coarse labels.
+    COARSE_LABEL_MAP = {
         "PERSON": PIIType.PERSON,
         "GPE": PIIType.ADDRESS,
         "LOC": PIIType.ADDRESS,
-        "FAC": PIIType.ADDRESS,
         "ADDRESS": PIIType.ADDRESS,
+        "EMAIL": PIIType.EMAIL,
+        "PHONE": PIIType.PHONE,
+        "PHONE_NUMBER": PIIType.PHONE,
     }
 
     def __init__(self, model_name: str = "ja_ginza") -> None:
@@ -41,6 +70,14 @@ class NlpExtractor:
             self.nlp = None
             self.is_available = False
 
+    @classmethod
+    def map_label(cls, label: str) -> PIIType | None:
+        """Map a GiNZA ENE/coarse label into the benchmark PII taxonomy."""
+        direct = cls.ENE_LABEL_MAP.get(label)
+        if direct is not None:
+            return direct
+        return cls.COARSE_LABEL_MAP.get(label.upper())
+
     def extract(self, text: str) -> list[PIIEntity]:
         if not self.is_available or self.nlp is None:
             return []
@@ -48,7 +85,7 @@ class NlpExtractor:
         doc = self.nlp(text)
         entities: list[PIIEntity] = []
         for ent in doc.ents:
-            pii_type = self.LABEL_MAP.get(ent.label_.upper())
+            pii_type = self.map_label(ent.label_)
             if pii_type is None:
                 continue
             entities.append(

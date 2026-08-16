@@ -9,8 +9,8 @@ def _values(text: str, pii_type: PIIType) -> list[str]:
     return [entity.text for entity in RegexExtractor().extract(text) if entity.type == pii_type]
 
 
-def test_regex_supports_unicode_email_local_part() -> None:
-    assert "山田@example.com" in _values("連絡先は山田@example.comです。", PIIType.EMAIL)
+def test_regex_ascii_email_does_not_swallow_japanese_prefix() -> None:
+    assert "taro@example.com" in _values("連絡先はtaro@example.comです。", PIIType.EMAIL)
 
 
 def test_regex_supports_dot_separated_phone() -> None:

@@ -3,7 +3,8 @@ from __future__ import annotations
 from src.extractors.llm_extractor import LlmRefiner
 from src.extractors.nlp_extractor import NlpExtractor
 from src.extractors.regex_extractor import RegexExtractor
-from src.schemas import PIIEntity, PIIType
+from src.pipeline import PiiPipeline
+from src.schemas import PIIEntity, PIIType, PipelineConfig
 
 
 def _values(text: str, pii_type: PIIType) -> list[str]:
@@ -14,9 +15,16 @@ def test_regex_ascii_email_does_not_swallow_japanese_prefix() -> None:
     assert "taro@example.com" in _values("連絡先はtaro@example.comです。", PIIType.EMAIL)
 
 
-def test_unicode_email_gets_recall_first_low_confidence_candidate() -> None:
+def test_unicode_email_broad_candidate_is_disabled_in_plain_regex_baseline() -> None:
     text = "ご参加には市石@hotmail.comをご確認ください。"
     emails = [e for e in RegexExtractor().extract(text) if e.type == PIIType.EMAIL]
+    assert not any(e.source == "regex_email_unicode_broad" for e in emails)
+
+
+def test_unicode_email_gets_recall_first_candidate_for_proposed_refinement() -> None:
+    text = "ご参加には市石@hotmail.comをご確認ください。"
+    extractor = RegexExtractor(include_ambiguous_email_candidates=True)
+    emails = [e for e in extractor.extract(text) if e.type == PIIType.EMAIL]
     broad = [e for e in emails if e.source == "regex_email_unicode_broad"]
     assert len(broad) == 1
     assert "市石@hotmail.com" in broad[0].text
@@ -24,9 +32,23 @@ def test_unicode_email_gets_recall_first_low_confidence_candidate() -> None:
     assert LlmRefiner.is_ambiguous(broad[0]) is True
 
 
+def test_pipeline_enables_broad_email_candidates_only_with_llm() -> None:
+    baseline = PiiPipeline(
+        PipelineConfig(use_regex=True, use_dict=False, use_nlp=False, use_llm=False)
+    )
+    proposed = PiiPipeline(
+        PipelineConfig(use_regex=True, use_dict=False, use_nlp=False, use_llm=True)
+    )
+    assert baseline.regex_extractor is not None
+    assert proposed.regex_extractor is not None
+    assert baseline.regex_extractor.include_ambiguous_email_candidates is False
+    assert proposed.regex_extractor.include_ambiguous_email_candidates is True
+
+
 def test_ascii_email_remains_high_confidence_and_bypasses_llm() -> None:
     text = "連絡先はtaro@example.comです。"
-    emails = [e for e in RegexExtractor().extract(text) if e.type == PIIType.EMAIL]
+    extractor = RegexExtractor(include_ambiguous_email_candidates=True)
+    emails = [e for e in extractor.extract(text) if e.type == PIIType.EMAIL]
     exact = [e for e in emails if e.text == "taro@example.com"]
     assert len(exact) == 1
     assert exact[0].score == 1.0

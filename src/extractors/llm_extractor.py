@@ -50,9 +50,16 @@ class LlmRefiner:
 
     @staticmethod
     def is_ambiguous(candidate: PIIEntity) -> bool:
-        # Structured regex matches are deliberately kept out of the LLM path.
+        # Structured, high-confidence regex matches deliberately bypass the LLM.
         if candidate.source == "regex" and candidate.score >= 0.9:
             return False
+
+        # Recall-first Unicode email candidates can be wider than the true span
+        # in unsegmented Japanese prose, so boundary correction is delegated to
+        # the local LLM. High-confidence ASCII email regex matches still bypass it.
+        if candidate.type == PIIType.EMAIL and candidate.score < 0.9:
+            return True
+
         return candidate.type in {PIIType.PERSON, PIIType.ADDRESS, PIIType.BANK_ACCOUNT}
 
     def refine(self, text: str, candidates: list[PIIEntity]) -> list[PIIEntity]:

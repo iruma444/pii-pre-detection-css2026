@@ -111,6 +111,11 @@ def evaluate_method(
         )
         pipeline = PiiPipeline(config)
         pipeline.reset_stats()
+        if config.use_nlp and pipeline.ginza_available is not True:
+            raise SystemExit(
+                f"Method {name!r} requires ja_ginza, but it is not available in this Python environment. "
+                "Activate the benchmark virtual environment before running this method."
+            )
 
     latencies_ms: list[float] = []
     exact_counts: list[Counts] = []

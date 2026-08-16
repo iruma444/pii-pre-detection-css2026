@@ -106,6 +106,7 @@ def evaluate_method(
             use_dict=bool(method_cfg.get("use_dict", True)),
             use_nlp=bool(method_cfg.get("use_nlp", True)),
             use_llm=bool(method_cfg.get("use_llm", True)),
+            use_boundary_split=bool(method_cfg.get("use_boundary_split", True)),
             llm_model=llm_model,
         )
         pipeline = PiiPipeline(config)

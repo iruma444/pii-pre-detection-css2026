@@ -16,7 +16,13 @@ class PiiPipeline:
 
     def __init__(self, config: PipelineConfig | None = None) -> None:
         self.config = config or PipelineConfig()
-        self.regex_extractor = RegexExtractor() if self.config.use_regex else None
+        self.regex_extractor = (
+            RegexExtractor(
+                include_ambiguous_email_candidates=bool(self.config.use_llm)
+            )
+            if self.config.use_regex
+            else None
+        )
         self.dict_extractor = DictExtractor() if self.config.use_dict else None
         self.nlp_extractor = NlpExtractor() if self.config.use_nlp else None
         self.llm_refiner = (

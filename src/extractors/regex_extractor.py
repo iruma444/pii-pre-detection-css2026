@@ -19,12 +19,12 @@ class RegexExtractor:
     """
 
     PATTERNS: dict[PIIType, str] = {
-        # ``\w`` is Unicode-aware in Python. This admits internationalized local
-        # parts such as Japanese names while preserving ordinary ASCII email
-        # addresses. The pattern remains intentionally conservative about
-        # whitespace and requires at least one dot in the domain.
+        # ``\w`` is Unicode-aware in Python, so the local part can contain
+        # Japanese characters. Keep the domain ASCII/punycode-style here so a
+        # following Japanese particle is not accidentally absorbed into the
+        # address span.
         PIIType.EMAIL: (
-            r"[\w.!#$%&'*+/=?^`{|}~-]+@[\w-]+(?:\.[\w-]+)+"
+            r"[\w.!#$%&'*+/=?^`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+"
         ),
         # Accept common Japanese/international separators, including dots used
         # by some generated Ai4Privacy telephone values.

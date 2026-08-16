@@ -61,7 +61,8 @@ class PiiPipeline:
             candidates.extend(self.nlp_extractor.extract(working_text))
 
         candidates = self._deduplicate(candidates)
-        candidates = self._deterministic_boundary_split(candidates)
+        if self.config.use_boundary_split:
+            candidates = self._deterministic_boundary_split(candidates)
 
         before_llm_calls = self.llm_refiner.stats.calls if self.llm_refiner else 0
         before_llm_seconds = self.llm_refiner.stats.seconds if self.llm_refiner else 0.0

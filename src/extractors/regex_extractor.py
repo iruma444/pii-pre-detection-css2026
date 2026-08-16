@@ -14,17 +14,23 @@ class RegexExtractor:
 
     The patterns are aligned with the coarse Ai4Privacy taxonomy used by
     ``benchmarks.ai4privacy_adapter``. In particular, ZIPCODE is evaluated as
-    ADDRESS, and generated EMAIL/PHONE/CREDIT_CARD values may use formatting
-    that is broader than the narrow Japanese examples used in the early pilot.
+    ADDRESS, and generated PHONE/CREDIT_CARD values may use formatting that is
+    broader than the narrow Japanese examples used in the early pilot.
+
+    Internationalized email local parts are deliberately not handled by this
+    regex rule. In unsegmented Japanese prose, a Unicode ``\\w+`` local-part
+    pattern can absorb ordinary sentence text immediately before ``@``. Those
+    cases are instead left to the GiNZA ``Email`` candidate mapping, while the
+    regex baseline keeps a high-precision ASCII local-part rule.
     """
 
     PATTERNS: dict[PIIType, str] = {
-        # ``\w`` is Unicode-aware in Python, so the local part can contain
-        # Japanese characters. Keep the domain ASCII/punycode-style here so a
-        # following Japanese particle is not accidentally absorbed into the
-        # address span.
+        # Keep the local part ASCII here so Japanese prose immediately before an
+        # address is never swallowed into the match. Internationalized local
+        # parts are covered by the NER stage in Regex+Dict+GiNZA / Proposed.
         PIIType.EMAIL: (
-            r"[\w.!#$%&'*+/=?^`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+"
+            r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+"
+            r"(?:\.[A-Za-z0-9-]+)+"
         ),
         # Accept common Japanese/international separators, including dots used
         # by some generated Ai4Privacy telephone values.

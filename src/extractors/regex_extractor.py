@@ -7,24 +7,18 @@ from src.schemas import PIIEntity, PIIType
 
 
 class RegexExtractor:
-    """Deterministic baseline for structured PII.
+    """Deterministic extractor for structured PII candidates.
 
     Rules are intentionally generic and contain no evaluation-sample-specific
     exceptions. They are kept in one place so that the exact benchmark rules
     are reproducible from the repository revision used for the paper.
 
-    The patterns are aligned with the coarse Ai4Privacy taxonomy used by
-    ``benchmarks.ai4privacy_adapter``. In particular, ZIPCODE is evaluated as
-    ADDRESS, and generated PHONE/CREDIT_CARD values may use formatting that is
-    broader than the narrow Japanese examples used in the early pilot.
-
-    EMAIL uses a two-tier strategy. Ordinary ASCII local parts are emitted as
-    high-confidence exact regex matches. If an ``@domain`` is not already
-    covered by that rule, a Unicode-capable, recall-first candidate is generated
-    by scanning left across characters that are plausible in an internationalized
-    local part. In unsegmented Japanese text this candidate may intentionally be
-    wider than the true email span; it is marked low-confidence so the proposed
-    pipeline can send it to the local LLM for boundary refinement.
+    The stable regex baseline emits only candidates that can reasonably be used
+    as final predictions without a contextual refiner.  The proposed method may
+    additionally enable a recall-first Unicode EMAIL candidate.  That candidate
+    is deliberately wider when Japanese prose is attached directly to an
+    internationalized local part, so it is an *intermediate candidate* for LLM
+    boundary refinement rather than a fair no-LLM baseline prediction.
     """
 
     PATTERNS: dict[PIIType, str] = {
@@ -59,6 +53,9 @@ class RegexExtractor:
 
     EMAIL_DOMAIN = re.compile(r"@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
     EMAIL_LOCAL_PUNCT = frozenset(".!#$%&'*+/=?^_`{|}~-")
+
+    def __init__(self, include_ambiguous_email_candidates: bool = False) -> None:
+        self.include_ambiguous_email_candidates = include_ambiguous_email_candidates
 
     @classmethod
     def _is_unicode_email_local_char(cls, ch: str) -> bool:
@@ -116,5 +113,6 @@ class RegexExtractor:
                 if pii_type == PIIType.EMAIL:
                     exact_emails.append(entity)
 
-        entities.extend(self._broad_unicode_email_candidates(text, exact_emails))
+        if self.include_ambiguous_email_candidates:
+            entities.extend(self._broad_unicode_email_candidates(text, exact_emails))
         return entities

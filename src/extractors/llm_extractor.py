@@ -21,9 +21,10 @@ class LlmRefiner:
     """Selective local-LLM refinement through Ollama.
 
     Only ambiguous candidates are sent to the model. High-confidence regex
-    candidates bypass the LLM. The model can KEEP, DISCARD, or SPLIT a
-    candidate. This design is deliberate: the paper evaluates both accuracy
-    and the fraction of documents that actually invoke the LLM.
+    candidates bypass the LLM. The model can KEEP, DISCARD, SPLIT, or REPLACE a
+    candidate. Recall-first candidates may intentionally contain extra context;
+    for those candidates the model is asked to trim the span rather than reject
+    the whole candidate when a valid PII subspan is present.
     """
 
     def __init__(
@@ -47,6 +48,11 @@ class LlmRefiner:
         self.think_level = think_level
         self.num_ctx = num_ctx
         self.stats = LLMCallStats()
+        # Diagnostic snapshots from the most recent call. They are not used by
+        # the detector itself, but make smoke tests auditable without changing
+        # prediction behavior.
+        self.last_response_text: str | None = None
+        self.last_decisions: dict[int, dict] = {}
 
     @staticmethod
     def is_ambiguous(candidate: PIIEntity) -> bool:
@@ -65,6 +71,8 @@ class LlmRefiner:
     def refine(self, text: str, candidates: list[PIIEntity]) -> list[PIIEntity]:
         ambiguous_indices = [i for i, c in enumerate(candidates) if self.is_ambiguous(c)]
         if not ambiguous_indices:
+            self.last_response_text = None
+            self.last_decisions = {}
             return candidates
 
         payload_candidates = []
@@ -77,6 +85,8 @@ class LlmRefiner:
                     "index": idx,
                     "type": cand.type.value,
                     "text": cand.text,
+                    "source": cand.source,
+                    "score": cand.score,
                     "context": text[left:right].replace("\n", " "),
                 }
             )
@@ -109,9 +119,13 @@ class LlmRefiner:
                 raw = json.loads(response.read().decode("utf-8"))
             response_text = self._response_text(raw)
             decisions = self._parse_response(response_text)
+            self.last_response_text = response_text
+            self.last_decisions = decisions
             return self._apply_decisions(candidates, decisions)
         except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError, OSError) as exc:
             self.stats.failures += 1
+            self.last_response_text = None
+            self.last_decisions = {}
             print(
                 f"[llm] refinement failed: {type(exc).__name__}: {exc}",
                 flush=True,
@@ -135,7 +149,7 @@ class LlmRefiner:
 
     def _build_prompt(self, text: str, candidates: list[dict]) -> str:
         candidates_json = json.dumps(candidates, ensure_ascii=False, indent=2)
-        return f"""あなたは日本語PII検出器の補正器です。候補の新規探索は行わず、与えられた候補だけを補正してください。
+        return f"""あなたは日本語PII検出器の候補補正器です。候補の新規探索は行わず、与えられた候補の内部だけを補正してください。
 
 対象文:
 {text}
@@ -143,13 +157,21 @@ class LlmRefiner:
 候補:
 {candidates_json}
 
-各候補について次のいずれかを判定してください。
-- KEEP: 候補範囲がPIIとして妥当。
-- DISCARD: PIIではない偽陽性。
-- SPLIT: 1候補に複数の同種PIIが結合している。partsに候補文字列内の各PII文字列を順番に入れる。
+重要な判定原則:
+1. 候補全体がPIIとして正しければ KEEP。
+2. 候補内に指定typeのPIIが一切含まれない場合だけ DISCARD。
+3. 候補内に指定typeの有効なPII部分があるが、前後に敬称・助詞・説明語・別の固有表現など余分な文字が付いている場合は DISCARD せず、必ず REPLACE で正しい部分だけを返す。
+4. 1候補に複数の同種PIIが結合している場合だけ SPLIT。
+5. 候補のtypeは変更しない。候補外の文字列を追加しない。
 
-境界補正が必要だが分割ではない場合は action=REPLACE とし、textに候補内部の正しいPII部分を入れてください。
-候補外の文字列を新規に追加してはいけません。
+特に source=regex_email_unicode_broad の EMAIL はRecall優先で意図的に広く切り出された候補です。@ とドメインを含む有効なメールアドレス部分が候補内部にあれば、余分な日本語が前に付いていても DISCARD してはいけません。REPLACE でメールアドレス部分だけを返してください。
+例: type=EMAIL, text="担当の佐藤様の花子@example.com" なら {{"action":"REPLACE","text":"花子@example.com"}}。
+
+各候補について次のいずれかを返してください。
+- KEEP
+- DISCARD
+- REPLACE: textに候補内部の正しいPII部分
+- SPLIT: partsに候補内部の各PII文字列を順番に列挙
 
 JSONのみを返してください。
 {{"decisions":[

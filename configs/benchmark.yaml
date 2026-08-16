@@ -44,12 +44,21 @@ methods:
     use_nlp: false
     use_llm: false
 
+  regex_dict_ginza_no_split:
+    mode: pipeline
+    use_regex: true
+    use_dict: true
+    use_nlp: true
+    use_llm: false
+    use_boundary_split: false
+
   regex_dict_ginza:
     mode: pipeline
     use_regex: true
     use_dict: true
     use_nlp: true
     use_llm: false
+    use_boundary_split: true
 
   proposed:
     mode: pipeline
@@ -57,6 +66,7 @@ methods:
     use_dict: true
     use_nlp: true
     use_llm: true
+    use_boundary_split: true
 
   llm_only:
     mode: llm_only

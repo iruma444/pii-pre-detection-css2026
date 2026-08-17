@@ -45,7 +45,8 @@ Write-Host "=== [1/7] temporary holdout generation (5 docs) ==="
     --output "datasets/_smoke_holdout_5.jsonl" `
     --n 5 `
     --seed 20260816 `
-    --holdout-config "configs/_smoke_holdout.yaml"
+    --holdout-config "configs/_smoke_holdout.yaml" `
+    --progress-every 100000
 if ($LASTEXITCODE -ne 0) { throw "Temporary holdout generation failed." }
 
 # 2-4) Deterministic methods on only 5 docs
@@ -107,7 +108,7 @@ if ($LASTEXITCODE -ne 0) { throw "LLM-only smoke aggregation failed." }
 # 7) Basic structural checks
 Write-Host ""
 Write-Host "=== [7/7] structural checks ==="
-& $Python -c "import json, pathlib; p=pathlib.Path('datasets/_smoke_holdout_5.manifest.json'); m=json.loads(p.read_text(encoding='utf-8')); assert m['overlap_with_development_ids']==0; assert m['overlap_with_development_source_indices']==0; assert m['n']==5; print('manifest overlap check: PASS')"
+& $Python -c "import json, pathlib; p=pathlib.Path('datasets/_smoke_holdout_5.manifest.json'); m=json.loads(p.read_text(encoding='utf-8')); assert m['overlap_with_all_excluded_ids']==0; assert m['overlap_with_all_excluded_source_indices']==0; assert m['n']==5; print('manifest overlap check: PASS')"
 if ($LASTEXITCODE -ne 0) { throw "Manifest overlap check failed." }
 
 Write-Host ""

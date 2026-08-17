@@ -1,0 +1,72 @@
+dataset:
+  path: datasets/ai4privacy_ja_500.jsonl
+  name: ai4privacy/pii-masking-openpii-1.5m
+  sample_size: 500
+  seed: 42
+
+evaluation:
+  # Common categories supported by both the proposed detector and the cloud baseline.
+  # AGE and DRIVER_ID remain part of the separate Bedrock exploratory analysis,
+  # but are not included in the proposed-method comparison because the original
+  # detector does not implement them.
+  target_types:
+    - PERSON
+    - EMAIL
+    - PHONE
+    - ADDRESS
+    - CREDIT_CARD
+
+llm:
+  backend: ollama
+  # Fixed local LLM condition for the CSS 2026 paper experiments.
+  model: gpt-oss:20b
+  temperature: 0.0
+
+nlp:
+  model: ja_ginza
+
+bootstrap:
+  iterations: 2000
+  seed: 42
+
+methods:
+  regex:
+    mode: pipeline
+    use_regex: true
+    use_dict: false
+    use_nlp: false
+    use_llm: false
+
+  regex_dict:
+    mode: pipeline
+    use_regex: true
+    use_dict: true
+    use_nlp: false
+    use_llm: false
+
+  regex_dict_ginza_no_split:
+    mode: pipeline
+    use_regex: true
+    use_dict: true
+    use_nlp: true
+    use_llm: false
+    use_boundary_split: false
+
+  regex_dict_ginza:
+    mode: pipeline
+    use_regex: true
+    use_dict: true
+    use_nlp: true
+    use_llm: false
+    use_boundary_split: true
+
+  proposed:
+    mode: pipeline
+    use_regex: true
+    use_dict: true
+    use_nlp: true
+    use_llm: true
+    use_boundary_split: true
+
+  llm_only:
+    mode: llm_only

@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+.DS_Store
+
+# Generated benchmark data/results
+datasets/*.jsonl
+datasets/*.manifest.json
+results/
+
+# Local model/runtime files
+*.log

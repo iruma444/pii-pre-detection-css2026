@@ -43,17 +43,27 @@ try {
         throw "Ollama check failed. Make sure Ollama is running and gpt-oss:20b is installed. Details: $_"
     }
 
-    # 1) Create a true holdout set, excluding the current development 500.
+    # Require the smoke sample and exclude it from the formal holdout as well.
+    # This keeps the final 500 completely separate from both development and preflight documents.
+    $SmokeExclude = "datasets\_smoke_holdout_5.jsonl"
+    if (-not (Test-Path $SmokeExclude)) {
+        throw "Smoke sample not found: $SmokeExclude. Run .\scripts\smoke_holdout.ps1 first."
+    }
+
+    # 1) Create a true holdout set, excluding development 500 + smoke documents.
     if (-not (Test-Path "datasets\ai4privacy_ja_holdout_500.jsonl")) {
         Write-Host ""
-        Write-Host "=== [1/8] CREATE HOLDOUT 500 ==="
+        Write-Host "=== [1/8] CREATE FORMAL HOLDOUT 500 ==="
+        Write-Host "This step scans the full fixed dataset revision; tens of minutes can be normal."
         & $Python -m benchmarks.make_holdout `
             --dev "datasets/ai4privacy_ja_500.jsonl" `
             --dev-manifest "datasets/ai4privacy_ja_500.manifest.json" `
+            --exclude-jsonl $SmokeExclude `
             --output "datasets/ai4privacy_ja_holdout_500.jsonl" `
             --n 500 `
             --seed 20260817 `
-            --holdout-config "configs/benchmark_holdout.yaml"
+            --holdout-config "configs/benchmark_holdout.yaml" `
+            --progress-every 100000
         if ($LASTEXITCODE -ne 0) { throw "Holdout generation failed." }
     }
     else {
@@ -62,6 +72,11 @@ try {
         if (-not (Test-Path "configs\benchmark_holdout.yaml")) {
             throw "Holdout JSONL exists but configs/benchmark_holdout.yaml is missing. Do not regenerate blindly."
         }
+        if (-not (Test-Path "datasets\ai4privacy_ja_holdout_500.manifest.json")) {
+            throw "Holdout JSONL exists but its manifest is missing."
+        }
+        & $Python -c "import json,pathlib; m=json.loads(pathlib.Path('datasets/ai4privacy_ja_holdout_500.manifest.json').read_text(encoding='utf-8')); assert m.get('overlap_with_all_excluded_ids')==0; assert m.get('overlap_with_all_excluded_source_indices')==0; assert m.get('n')==500; print('formal holdout manifest check: PASS')"
+        if ($LASTEXITCODE -ne 0) { throw "Existing formal holdout manifest is not from the hardened generator. Remove the formal holdout files and rerun." }
     }
 
     # 2) R

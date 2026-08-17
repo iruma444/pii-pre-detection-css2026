@@ -11,15 +11,19 @@ import yaml
 from benchmarks.ai4privacy_adapter import DATASET_NAME, _is_japanese, convert_example
 
 
-def load_jsonl_ids(path: Path) -> set[str]:
+def load_jsonl_identity(path: Path) -> tuple[set[str], set[int]]:
     ids: set[str] = set()
+    source_indices: set[int] = set()
     with path.open("r", encoding="utf-8") as f:
         for line in f:
             if not line.strip():
                 continue
             row = json.loads(line)
             ids.add(str(row["id"]))
-    return ids
+            metadata = row.get("metadata", {})
+            if metadata.get("source_index") is not None:
+                source_indices.add(int(metadata["source_index"]))
+    return ids, source_indices
 
 
 def sha256_file(path: Path) -> str:
@@ -32,12 +36,18 @@ def sha256_file(path: Path) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Create a 500-document holdout set that excludes the existing development set."
+        description="Create a held-out Japanese benchmark while excluding development/smoke documents."
     )
     parser.add_argument("--dev", default="datasets/ai4privacy_ja_500.jsonl")
     parser.add_argument(
         "--dev-manifest",
         default="datasets/ai4privacy_ja_500.manifest.json",
+    )
+    parser.add_argument(
+        "--exclude-jsonl",
+        action="append",
+        default=[],
+        help="Additional JSONL file whose document ids/source indices must be excluded. May be repeated.",
     )
     parser.add_argument(
         "--output",
@@ -59,6 +69,12 @@ def main() -> None:
         "--holdout-config",
         default="configs/benchmark_holdout.yaml",
     )
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=100000,
+        help="Print streaming progress every N source rows. Set 0 to disable.",
+    )
     args = parser.parse_args()
 
     dev_path = Path(args.dev)
@@ -68,7 +84,7 @@ def main() -> None:
     if not dev_path.exists():
         raise SystemExit(f"Development dataset not found: {dev_path}")
 
-    dev_ids = load_jsonl_ids(dev_path)
+    dev_ids, dev_indices_from_jsonl = load_jsonl_identity(dev_path)
 
     manifest: dict = {}
     if dev_manifest_path.exists():
@@ -83,6 +99,22 @@ def main() -> None:
         )
 
     dev_source_indices = {int(x) for x in manifest.get("source_indices", [])}
+    dev_source_indices |= dev_indices_from_jsonl
+
+    extra_ids: set[str] = set()
+    extra_source_indices: set[int] = set()
+    extra_paths: list[str] = []
+    for raw_path in args.exclude_jsonl:
+        path = Path(raw_path)
+        if not path.exists():
+            raise SystemExit(f"Additional exclusion file not found: {path}")
+        ids, indices = load_jsonl_identity(path)
+        extra_ids |= ids
+        extra_source_indices |= indices
+        extra_paths.append(str(path))
+
+    excluded_ids = dev_ids | extra_ids
+    excluded_source_indices = dev_source_indices | extra_source_indices
 
     try:
         from datasets import load_dataset
@@ -96,7 +128,10 @@ def main() -> None:
     print(f"[holdout] revision={revision}")
     print(f"[holdout] dev_ids={len(dev_ids)}")
     print(f"[holdout] dev_source_indices={len(dev_source_indices)}")
+    print(f"[holdout] additional_excluded_ids={len(extra_ids)}")
+    print(f"[holdout] additional_excluded_source_indices={len(extra_source_indices)}")
     print(f"[holdout] target_n={args.n} seed={args.seed}")
+    print("[holdout] scanning the full fixed dataset revision for an unbiased reservoir sample...")
 
     stream = load_dataset(
         DATASET_NAME,
@@ -109,17 +144,26 @@ def main() -> None:
     reservoir: list[tuple[int, dict]] = []
     eligible_count = 0
     japanese_count = 0
-    excluded_dev_count = 0
+    excluded_count = 0
+    source_rows_seen = 0
 
     for source_index, example in enumerate(stream):
+        source_rows_seen = source_index + 1
+        if args.progress_every > 0 and source_rows_seen % args.progress_every == 0:
+            print(
+                f"[holdout] progress source_rows={source_rows_seen} "
+                f"japanese={japanese_count} eligible={eligible_count} excluded={excluded_count}",
+                flush=True,
+            )
+
         if not _is_japanese(example):
             continue
 
         japanese_count += 1
         example_id = str(example.get("uid", source_index))
 
-        if example_id in dev_ids or source_index in dev_source_indices:
-            excluded_dev_count += 1
+        if example_id in excluded_ids or source_index in excluded_source_indices:
+            excluded_count += 1
             continue
 
         eligible_count += 1
@@ -146,8 +190,8 @@ def main() -> None:
         for source_index, example in reservoir
     ]
 
-    overlap_ids = dev_ids.intersection(holdout_ids)
-    overlap_indices = dev_source_indices.intersection(holdout_source_indices)
+    overlap_ids = excluded_ids.intersection(holdout_ids)
+    overlap_indices = excluded_source_indices.intersection(holdout_source_indices)
     if overlap_ids or overlap_indices:
         raise SystemExit(
             "HOLDOUT OVERLAP DETECTED: "
@@ -167,19 +211,22 @@ def main() -> None:
         "role": "held-out test",
         "n": args.n,
         "seed": args.seed,
-        "sampling": "reservoir sampling from Japanese documents after excluding development ids/source indices",
+        "sampling": "reservoir sampling from Japanese documents after excluding development/additional ids and source indices",
+        "source_rows_seen": source_rows_seen,
         "japanese_pool_size": japanese_count,
-        "eligible_after_dev_exclusion": eligible_count,
-        "excluded_development_documents_seen": excluded_dev_count,
+        "eligible_after_exclusion": eligible_count,
+        "excluded_documents_seen": excluded_count,
         "development_dataset": str(dev_path),
         "development_manifest": str(dev_manifest_path),
         "development_document_count": len(dev_ids),
+        "additional_exclusion_files": extra_paths,
+        "additional_excluded_document_count": len(extra_ids),
         "source_indices": holdout_source_indices,
         "sample_ids": holdout_ids,
         "output": str(output_path),
         "output_sha256": sha256_file(output_path),
-        "overlap_with_development_ids": 0,
-        "overlap_with_development_source_indices": 0,
+        "overlap_with_all_excluded_ids": 0,
+        "overlap_with_all_excluded_source_indices": 0,
     }
 
     manifest_out = output_path.with_suffix(".manifest.json")
@@ -188,7 +235,6 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    # Create a separate benchmark config so the development config is never overwritten.
     base_cfg_path = Path(args.base_config)
     holdout_cfg_path = Path(args.holdout_config)
     cfg = yaml.safe_load(base_cfg_path.read_text(encoding="utf-8"))
@@ -202,7 +248,7 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    print("[holdout] PASS: development/holdout overlap = 0")
+    print("[holdout] PASS: overlap with development/additional exclusions = 0")
     print(f"[holdout] output={output_path}")
     print(f"[holdout] manifest={manifest_out}")
     print(f"[holdout] sha256={output_manifest['output_sha256']}")
